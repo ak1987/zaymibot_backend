@@ -1,0 +1,51 @@
+{
+  "startMsg": "Привет, %username%! Добро пожаловать в %namebot%!",
+  "startButtonName": "Начнём",
+  "startSeconfMsg": "Выберите сумму займа:",
+  "startThirdfMsg": "Какова ваша кредитная история?",
+  "startFourthMsg": "Отлично! Перейдите по ссылке для оформления займа:",
+  "startFourthButton": "Получить деньги",
+  "startAnketa": "https://example.com/anketa",
+  "startSum": [
+    { "button": "До 10 000 ₽", "sum": "10000" },
+    { "button": "До 30 000 ₽", "sum": "30000" },
+    { "button": "До 50 000 ₽", "sum": "50000" }
+  ],
+  "historyCredit": [
+    { "name": "Отличная", "status": "excellent" },
+    { "name": "Средняя", "status": "average" },
+    { "name": "Плохая", "status": "poor" },
+    { "name": "Не знаю", "status": "unknown" }
+  ],
+  "day": {
+    "link": "https://example.com/day",
+    "text": "Специальное предложение дня! Получите займ %sumuser%",
+    "amount": "30 000",
+    "startButtonName": "Получить займ дня"
+  },
+  "week": {
+    "link": "https://example.com/week",
+    "text": "Лучшее предложение недели! Займ %sumuser%",
+    "amount": "50 000",
+    "startButtonName": "Получить займ недели"
+  },
+  "how": {
+    "link": "https://example.com/how",
+    "textOne": "Как получить деньги? Очень просто!",
+    "textSecond": "Заполните анкету и получите деньги на карту.",
+    "startButtonName": "Начать оформление"
+  },
+  "all": [
+    {
+      "name": "Оффер 1",
+      "link": "https://example.com/offer1"
+    },
+    {
+      "name": "Оффер 2",
+      "link": "https://example.com/offer2"
+    }
+  ],
+  "textOneAll": "Все доступные предложения:",
+  "textSecondAll": "Выберите подходящий вариант:",
+  "insuranceText": "Информация об отказе от страховки."
+}

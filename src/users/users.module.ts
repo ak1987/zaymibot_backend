@@ -5,12 +5,13 @@ import { UsersController } from './users.controller';
 import { JwtModule } from '@nestjs/jwt';
 import { jwtConstants } from './constants';
 import { JwtStrategy } from './jwt.strategy';
+import type { StringValue } from 'ms';
 
 @Module({
   imports: [
     JwtModule.register({
       secret: jwtConstants.secret,
-      signOptions: { expiresIn: process.env.JWT_AUTH_TIME },
+      signOptions: { expiresIn: process.env.JWT_AUTH_TIME as StringValue },
     }),
   ],
   providers: [UsersService, JwtStrategy],
