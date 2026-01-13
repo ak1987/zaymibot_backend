@@ -1,211 +1,73 @@
-# Zaymibot - Telegram Bot для займов
+<p align="center">
+  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="200" alt="Nest Logo" /></a>
+</p>
 
-Telegram бот для продвижения микрозаймов, построенный на TypeScript и Telegraf.
+[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
+[circleci-url]: https://circleci.com/gh/nestjs/nest
 
-## 🚀 Возможности
+  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
+    <p align="center">
+<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
+<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
+<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
+<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
+<a href="https://coveralls.io/github/nestjs/nest?branch=master" target="_blank"><img src="https://coveralls.io/repos/github/nestjs/nest/badge.svg?branch=master#9" alt="Coverage" /></a>
+<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
+<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
+<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
+  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg"/></a>
+    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
+  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow"></a>
+</p>
+  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
+  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
 
-- ✅ Полная поддержка русского языка
-- ✅ Интерактивная анкета с inline-кнопками
-- ✅ Динамическая генерация ссылок с данными пользователя (ID, username, имя)
-- ✅ Команды для различных предложений займов
-- ✅ Конфигурируемые офферы через JSON
-- ✅ GIF и изображения в сообщениях
-- ✅ Безопасное хранение токенов через .env
-- ✅ Встроенное меню команд (отображается в интерфейсе Telegram)
+## Description
 
-## 📋 Команды бота
+[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
 
-Все команды доступны через **встроенное меню** в Telegram (кнопка "/" или "Меню" возле поля ввода):
-
-- `/start` - 🖐 Приветственное сообщение с анимацией и началом анкеты
-- `/day` - 💚 Займ дня (лучшее предложение дня)
-- `/week` - 💚 Займ недели (топ предложение за неделю)
-- `/how` - 💡 Инструкция как получить деньги
-- `/all` - 📋 Все предложения по рейтингу
-- `/insurance` - 🛡 Информация об отказе от страховки
-
-## 🎯 Флоу пользователя
-
-1. **Команда /start** → Приветствие с GIF + кнопка "Начнём"
-2. **Анкета вопрос 1** → Выбор суммы займа (до 5000 / до 15000 / до 30000 / больше 30000)
-3. **Анкета вопрос 2** → Кредитная история (отличная / средняя / плохая / не знаю)
-4. **Результат** → Ссылка на оформление + кнопка "Получить деньги"
-
-## 🛠 Установка
-
-### 1. Установите зависимости
+## Installation
 
 ```bash
-npm install
+$ npm install
 ```
 
-### 2. Создайте бота в Telegram
+## Running the app
 
-1. Откройте [@BotFather](https://t.me/BotFather) в Telegram
-2. Отправьте команду `/newbot`
-3. Следуйте инструкциям для создания бота
-4. Скопируйте полученный токен
-
-### 3. Настройте токен бота
-
-Создайте файл `.env` в корне проекта:
-
-```env
-BOT_TOKEN=ваш_токен_от_BotFather
-```
-
-### 4. Настройте офферы (опционально)
-
-Отредактируйте файл `src/offers.json` для настройки ссылок на офферы:
-
-```json
-{
-  "day": {
-    "offname": "nadomoney",
-    "link": "https://your-link.com/...",
-    "amount": "30 000"
-  },
-  "week": {
-    "offname": "bestweek",
-    "link": "https://your-link.com/...",
-    "amount": "30 000"
-  },
-  "all": [
-    {
-      "name": "Название оффера",
-      "link": "https://your-link.com/..."
-    }
-  ]
-}
-```
-
-### 5. Запустите бота
-
-**Режим разработки:**
 ```bash
-npm run dev
+# development
+$ npm run start
+
+# watch mode
+$ npm run start:dev
+
+# production mode
+$ npm run start:prod
 ```
 
-**Продакшн (с компиляцией):**
+## Test
+
 ```bash
-npm run build
-npm start
+# unit tests
+$ npm run test
+
+# e2e tests
+$ npm run test:e2e
+
+# test coverage
+$ npm run test:cov
 ```
 
-**Watch mode (авто-пересборка):**
-```bash
-npm run watch
-```
+## Support
 
-## 📁 Структура проекта
+Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
 
-```
-zaymibot/
-├── src/
-│   ├── index.ts          # Основная логика бота
-│   └── offers.json       # Конфигурация офферов
-├── dist/                 # Скомпилированный JS (после build)
-├── .env                  # Переменные окружения (токен бота)
-├── .gitignore           # Правила игнорирования Git
-├── package.json         # Зависимости и скрипты
-├── tsconfig.json        # Конфигурация TypeScript
-└── README.md            # Этот файл
-```
+## Stay in touch
 
-## 🔧 Технические детали
+- Author - [Kamil Myśliwiec](https://kamilmysliwiec.com)
+- Website - [https://nestjs.com](https://nestjs.com/)
+- Twitter - [@nestframework](https://twitter.com/nestframework)
 
-### Генерация ссылок с данными пользователя
+## License
 
-Бот автоматически добавляет к ссылкам параметры:
-- `uid` - Telegram ID пользователя
-- `alias` - Username пользователя (если есть)
-- `name` - Имя пользователя
-
-Пример:
-```
-https://tracktunnel.sbs/...&uid=123456789&alias=username&name=Иван
-```
-
-### Состояние пользователя
-
-Бот сохраняет состояние анкеты в памяти:
-- Выбранная сумма займа
-- Состояние кредитной истории
-
-### Inline-кнопки
-
-Все кнопки реализованы через `Markup.inlineKeyboard()`:
-- Кнопки с callback'ами для навигации
-- URL-кнопки для перехода на офферы
-- Кнопки "Назад" для возврата к предыдущим шагам
-
-## 🎨 Персонализация
-
-### Добавление нового оффера в /all
-
-Отредактируйте `src/offers.json`:
-
-```json
-{
-  "all": [
-    {
-      "name": "Новый оффер",
-      "link": "https://your-tracking-link.com/..."
-    }
-  ]
-}
-```
-
-### Добавление новой команды
-
-Добавьте в `src/index.ts`:
-
-```typescript
-bot.command('mycommand', (ctx) => {
-  ctx.reply('Текст ответа');
-});
-```
-
-### Изменение изображений
-
-В коде используются следующие медиа:
-- **GIF приветствия**: `https://media1.tenor.com/m/4EElxXeHiZwAAAAC/forrest-gump-wave.gif`
-- **Фото анкеты**: `https://img.vedu.ru/office-woman-660-1.jpg`
-
-Замените URL в `src/index.ts` на свои.
-
-## 📊 Мониторинг
-
-Бот выводит логи в консоль:
-- ✅ Успешный запуск
-- ❌ Ошибки обработки запросов
-- 📝 Информация о состоянии
-
-## 🐛 Решение проблем
-
-**Бот не отвечает:**
-- Проверьте правильность токена в `.env`
-- Убедитесь, что бот запущен (`npm run dev`)
-- Проверьте консоль на наличие ошибок
-
-**Ошибки TypeScript:**
-- Выполните `npm install` для установки всех зависимостей
-- Проверьте версию Node.js (требуется v16+)
-
-**Кнопки не работают:**
-- Убедитесь, что используете inline-кнопки, а не reply-клавиатуру
-- Проверьте callback handlers в коде
-
-## 📚 Полезные ссылки
-
-- [Telegraf документация](https://telegraf.js.org/)
-- [Telegram Bot API](https://core.telegram.org/bots/api)
-- [TypeScript документация](https://www.typescriptlang.org/)
-
-## 📝 Лицензия
-
-MIT
-
----
-
-**Примечание:** Бот хранит состояние пользователей в памяти. При перезапуске бота данные анкет будут потеряны. Для продакшн-использования рекомендуется добавить персистентное хранилище (Redis, MongoDB и т.д.).
+Nest is [MIT licensed](LICENSE).
