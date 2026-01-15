@@ -2,30 +2,43 @@
 export interface TelegramBotData {
   startMsg: string;
   startButtonName: string;
-  startSeconfMsg: string;
-  startThirdfMsg: string;
-  startFourthMsg: string;
-  startFourthButton: string;
+  startButtonNameEn: string;
+  secondMsg: string;
+  sum: Array<{ buttonName: string; buttonNameEn: string; sum: number }>;
+  thirdMsg: string;
+  historyCredit: Array<{ buttonName: string; buttonNameEn: string; status: string }>;
+  fourthMsg: string;
+  fourthButton: string;
+  fourthButtonEn: string;
   startAnketa: string;
-  startSum: Array<{ button: string; sum: string }>;
-  historyCredit: Array<{ name: string; status: string }>;
   day: {
-    link: string;
+    offname: string;
+    offnameru: string;
     text: string;
+    buttonName: string;
+    buttonNameEn: string;
+    offcat: string;
+    offposition: string;
+    link: string;
     amount: string;
-    startButtonName: string;
   };
   week: {
-    link: string;
+    offname: string;
+    offnameru: string;
     text: string;
+    buttonName: string;
+    buttonNameEn: string;
+    offcat: string;
+    offposition: string;
+    link: string;
     amount: string;
-    startButtonName: string;
   };
   how: {
     link: string;
     textOne: string;
     textSecond: string;
-    startButtonName: string;
+    buttonName: string;
+    buttonNameEn: string;
   };
   all: Array<{
     name: string;

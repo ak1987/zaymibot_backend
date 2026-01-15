@@ -4,11 +4,15 @@ import { TelegramBotData } from './telegram-data.interface';
 import * as data from './data.json';
 import * as path from 'path';
 import * as fs from 'fs';
+import { BinomService } from '../binom/binom.service';
 
 // User state storage for questionnaire
 interface UserState {
   loanAmount?: string;
   creditHistory?: string;
+  binomAdid?: string; // Telegram channel name from deeplink
+  binomSub2?: string; // User Telegram alias
+  binomAddinfo?: string; // Button title (optional)
 }
 
 @Injectable()
@@ -19,7 +23,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private readonly BOT_NAME = 'ЗаймиБот';
   private readonly verboseLogs: boolean;
 
-  constructor() {
+  constructor(private readonly binomService: BinomService) {
     const BOT_TOKEN = process.env.BOT_TOKEN;
     
     if (!BOT_TOKEN) {
@@ -44,9 +48,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     // Command: /start
     this.bot.start((ctx) => {
       const user = this.getUserIdentifier(ctx);
+      const userId = ctx.from?.id;
       
       // Extract deep link payload (?start=payload)
       // Telegram sends /start payload when user clicks https://t.me/botname?start=payload
+      // Format: ch_telegramchanelname__foo_bar
+      // Split by __ to get key-value pairs, then split by _ to separate key and value
       let payload: string | null = null;
       if (ctx.message && 'text' in ctx.message && ctx.message.text) {
         const parts = ctx.message.text.split(' ');
@@ -55,10 +62,51 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         }
       }
       
-      if (payload) {
+      // Parse deeplink payload
+      if (payload && userId) {
         this.verboseLog(`User ${user} executed /start command with payload: ${payload}`);
+        
+        // Parse deeplink: ch_telegramchanelname__foo_bar
+        // Split by __ to get pairs
+        const pairs = payload.split('__');
+        const state = this.userStates.get(userId) || {};
+        
+        pairs.forEach((pair) => {
+          // Split by _ to separate key and value
+          // Underscores are strictly separators, never used in keys or values
+          const parts = pair.split('_');
+          if (parts.length === 2) {
+            const key = parts[0];
+            const value = parts[1];
+            
+            // Map deeplink keys to binom data
+            if (key === 'ch') {
+              // ch_telegramchanelname -> adid = telegramchanelname
+              state.binomAdid = value;
+            } else if (key === 'sub2') {
+              state.binomSub2 = value;
+            } else if (key === 'addinfo') {
+              state.binomAddinfo = value;
+            }
+          }
+        });
+        
+        // Set sub2 to user's Telegram alias if not provided in deeplink
+        if (!state.binomSub2) {
+          state.binomSub2 = ctx.from?.username || String(userId);
+        }
+        
+        this.userStates.set(userId, state);
+        this.verboseLog(`User ${user} parsed deeplink - adid: ${state.binomAdid}, sub2: ${state.binomSub2}, addinfo: ${state.binomAddinfo}`);
       } else {
         this.verboseLog(`User ${user} executed /start command`);
+        
+        // Initialize state with default sub2 if no deeplink
+        if (userId) {
+          const state = this.userStates.get(userId) || {};
+          state.binomSub2 = ctx.from?.username || String(userId);
+          this.userStates.set(userId, state);
+        }
       }
       
       const message = this.replacePlaceholders((data as TelegramBotData).startMsg, ctx);
@@ -81,13 +129,22 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const user = this.getUserIdentifier(ctx);
       this.verboseLog(`User ${user} clicked start_questionnaire button`);
       
+      const buttonNameEn = (data as TelegramBotData).startButtonNameEn;
+      
+      // Call binom tracking (fire-and-forget, wrapped in try-catch to prevent breaking button)
+      try {
+        this.trackButtonClick(ctx, buttonNameEn);
+      } catch (error) {
+        this.logger.error('Error in trackButtonClick:', error);
+      }
+      
       ctx.replyWithPhoto(
         'https://img.vedu.ru/office-woman-660-1.jpg',
         {
-          caption: (data as TelegramBotData).startSeconfMsg,
+          caption: (data as TelegramBotData).secondMsg,
           ...Markup.inlineKeyboard(
-            (data as TelegramBotData).startSum.map((item) => 
-              [Markup.button.callback(item.button, `amount_${item.sum}`)]
+            (data as TelegramBotData).sum.map((item) => 
+              [Markup.button.callback(item.buttonName, `amount_${item.sum}`)]
             )
           )
         }
@@ -105,15 +162,21 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const user = this.getUserIdentifier(ctx);
       this.verboseLog(`User ${user} selected loan amount ${amount}`);
       
+      // Find button name from data (compare as strings to handle both number and string types)
+      // Use English button name for addinfo to prevent UTF-8 encoding issues
+      const buttonNameEn = (data as TelegramBotData).sum.find(item => String(item.sum) === amount)?.buttonNameEn || `amount_${amount}`;
+      
+      this.trackButtonClick(ctx, buttonNameEn);
+      
       const state = this.userStates.get(userId) || {};
       state.loanAmount = amount;
       this.userStates.set(userId, state);
       
       ctx.reply(
-        (data as TelegramBotData).startThirdfMsg,
+        (data as TelegramBotData).thirdMsg,
         Markup.inlineKeyboard([
           ...(data as TelegramBotData).historyCredit.map((item) => 
-            [Markup.button.callback(item.name, `credit_${item.status}`)]
+            [Markup.button.callback(item.buttonName, `credit_${item.status}`)]
           ),
           [Markup.button.callback('« Назад', 'start_questionnaire')]
         ])
@@ -131,17 +194,25 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const user = this.getUserIdentifier(ctx);
       this.verboseLog(`User ${user} selected credit history ${creditHistory}`);
       
+      // Find button name from data (compare as strings to handle both number and string types)
+      // Use English button name for addinfo to prevent UTF-8 encoding issues
+      const buttonNameEn = (data as TelegramBotData).historyCredit.find(item => String(item.status) === creditHistory)?.buttonNameEn || `credit_${creditHistory}`;
+      
+      this.trackButtonClick(ctx, buttonNameEn);
+      
       const state = this.userStates.get(userId) || {};
       state.creditHistory = creditHistory;
       this.userStates.set(userId, state);
       
-      const link = this.buildLink((data as TelegramBotData).startAnketa, ctx);
+      // Generate final link using binom - use English button name for addinfo
+      const link = this.buildFinalLink(ctx, (data as TelegramBotData).fourthButtonEn);
+      this.logger.log(`User ${user} clicked offer`);
       this.verboseLog(`User ${user} generated application link ${link}`);
       
       ctx.reply(
-        `${(data as TelegramBotData).startFourthMsg}\n\n👉 ${link}`,
+        `${(data as TelegramBotData).fourthMsg}\n\n👉 ${link}`,
         Markup.inlineKeyboard([
-          [Markup.button.url((data as TelegramBotData).startFourthButton, link)],
+          [Markup.button.url((data as TelegramBotData).fourthButton, link)],
           [Markup.button.callback('« Назад', 'back_to_amount')]
         ])
       );
@@ -155,10 +226,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       this.verboseLog(`User ${user} clicked back_to_amount button`);
       
       ctx.reply(
-        (data as TelegramBotData).startSeconfMsg,
+        (data as TelegramBotData).secondMsg,
         Markup.inlineKeyboard(
-          (data as TelegramBotData).startSum.map((item) => 
-            [Markup.button.callback(item.button, `amount_${item.sum}`)]
+          (data as TelegramBotData).sum.map((item) => 
+            [Markup.button.callback(item.buttonName, `amount_${item.sum}`)]
           )
         )
       );
@@ -180,7 +251,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       ctx.reply(
         `${message}\n\n👉 ${link}`,
         Markup.inlineKeyboard([
-          [Markup.button.url(dayOffer.startButtonName, link)]
+          [Markup.button.url(dayOffer.buttonName, link)]
         ])
       );
     });
@@ -201,7 +272,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       ctx.reply(
         `${message}\n\n👉 ${link}`,
         Markup.inlineKeyboard([
-          [Markup.button.url(weekOffer.startButtonName, link)]
+          [Markup.button.url(weekOffer.buttonName, link)]
         ])
       );
     });
@@ -218,7 +289,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       ctx.reply(
         `${howOffer.textOne}\n\n👉 ${link}\n\n${howOffer.textSecond}`,
         Markup.inlineKeyboard([
-          [Markup.button.url(howOffer.startButtonName, link)]
+          [Markup.button.url(howOffer.buttonName, link)]
         ])
       );
     });
@@ -327,7 +398,115 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const username = ctx.from?.username || '';
     const name = ctx.from?.first_name || '';
     
-    return `${baseLink}&uid=${userId}&alias=${username}&name=${encodeURIComponent(name)}`;
+    let link = `${baseLink}&uid=${userId}&alias=${username}&name=${encodeURIComponent(name)}`;
+    
+    // Add binom parameters if available
+    const binomSource = process.env.BINOM_SOURCE;
+    if (userId) {
+      const state = this.userStates.get(userId);
+      if (state) {
+        // Add source parameter - use state.binomSub2 which has fallback to userId
+        if (binomSource) {
+          const sub2 = state.binomSub2 || String(userId);
+          link += `&source=${binomSource}&sub2=${sub2}`;
+        }
+        // Add adid parameter (from deeplink)
+        if (state.binomAdid) {
+          link += `&adid=${state.binomAdid}`;
+        } else {
+          link += `&adid=`;
+        }
+        // Add addinfo parameter (from deeplink or button name)
+        if (state.binomAddinfo) {
+          link += `&addinfo=${state.binomAddinfo}`;
+        } else {
+          link += `&addinfo=`;
+        }
+      } else {
+        // If no state, use username or userId as fallback for sub2
+        if (binomSource) {
+          const sub2 = username || String(userId);
+          link += `&source=${binomSource}&sub2=${sub2}`;
+        }
+        link += `&adid=&addinfo=`;
+      }
+    } else {
+      // If no userId, add empty parameters
+      if (binomSource) {
+        link += `&source=${binomSource}&sub2=`;
+      }
+      link += `&adid=&addinfo=`;
+    }
+    
+    return link;
+  }
+
+  // Helper function to build final link using binom
+  private buildFinalLink(ctx: Context, buttonName: string): string {
+    const userId = ctx.from?.id;
+    if (!userId) {
+      return this.buildLink((data as TelegramBotData).startAnketa, ctx);
+    }
+
+    const state = this.userStates.get(userId);
+    if (!state || !state.binomAdid || !state.binomSub2) {
+      // Fallback to regular link if binom data is not available
+      this.verboseLog(`User ${this.getUserIdentifier(ctx)}: binom data not available, using fallback link`);
+      return this.buildLink((data as TelegramBotData).startAnketa, ctx);
+    }
+
+    // Always use binom to form the final URL
+    const binomUrl = this.binomService.formUrl(
+      state.binomAdid,
+      state.binomSub2,
+      buttonName
+    );
+
+    if (binomUrl) {
+      this.verboseLog(`User ${this.getUserIdentifier(ctx)}: using binom link with adid=${state.binomAdid}, sub2=${state.binomSub2}`);
+      return binomUrl;
+    }
+
+    // Fallback to regular link if binom URL formation fails
+    this.logger.warn(`User ${this.getUserIdentifier(ctx)}: binom URL formation failed, using fallback link`);
+    return this.buildLink((data as TelegramBotData).startAnketa, ctx);
+  }
+
+  // Helper function to track button clicks with binom
+  // Fire-and-forget: we don't wait for the HTTP call to complete
+  private trackButtonClick(ctx: Context, buttonName: string): void {
+    try {
+      const userId = ctx.from?.id;
+      const user = this.getUserIdentifier(ctx);
+      
+      // Log button click
+      this.logger.log(`User ${user} clicked button: ${buttonName}`);
+      
+      if (!userId) return;
+
+      const state = this.userStates.get(userId);
+      if (!state || !state.binomAdid || !state.binomSub2) {
+        // Skip tracking if binom data is not available
+        return;
+      }
+
+      // Form URL and make tracking call (fire-and-forget)
+      const trackingUrl = this.binomService.formUrl(
+        state.binomAdid,
+        state.binomSub2,
+        buttonName
+      );
+
+      if (trackingUrl) {
+        // Call binom asynchronously without waiting
+        this.binomService.httpCall(trackingUrl).catch((error) => {
+          this.logger.error('Error in binom tracking call:', error);
+        });
+      }
+    } catch (error) {
+      // Silently catch any errors to prevent breaking button functionality
+      this.logger.error('Error in trackButtonClick:', error);
+    }
   }
 
   // Helper function to get user's first name
