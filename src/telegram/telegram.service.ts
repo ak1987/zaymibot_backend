@@ -1,10 +1,22 @@
 import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { Telegraf, Markup, Context } from 'telegraf';
 import { TelegramBotData } from './telegram-data.interface';
-import * as data from './data.json';
+import { readFileSync } from 'fs';
 import * as path from 'path';
 import * as fs from 'fs';
 import { BinomService } from '../binom/binom.service';
+
+const CONFIG_PATH = '/config/telegram.json';
+
+export function getTelegramData(): TelegramBotData {
+  try {
+    const raw = readFileSync(CONFIG_PATH, 'utf-8');
+    return JSON.parse(raw) as TelegramBotData;
+  } catch (err) {
+    console.error('Ошибка при чтении telegram.json:', err);
+    throw new Error(`Failed to load telegram bot data: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
 
 // User state storage for questionnaire
 interface UserState {
@@ -109,14 +121,15 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         }
       }
       
-      const message = this.replacePlaceholders((data as TelegramBotData).startMsg, ctx);
+      const data = getTelegramData();
+      const message = this.replacePlaceholders(data.startMsg, ctx);
       
       ctx.replyWithAnimation(
         'https://media1.tenor.com/m/4EElxXeHiZwAAAAC/forrest-gump-wave.gif',
         {
           caption: message,
           ...Markup.inlineKeyboard([
-            [Markup.button.callback((data as TelegramBotData).startButtonName, 'start_questionnaire')]
+            [Markup.button.callback(data.startButtonName, 'start_questionnaire')]
           ])
         }
       );
@@ -129,7 +142,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const user = this.getUserIdentifier(ctx);
       this.verboseLog(`User ${user} clicked start_questionnaire button`);
       
-      const buttonNameEn = (data as TelegramBotData).startButtonNameEn;
+      const data = getTelegramData();
+      const buttonNameEn = data.startButtonNameEn;
       
       // Call binom tracking (fire-and-forget, wrapped in try-catch to prevent breaking button)
       try {
@@ -141,9 +155,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       ctx.replyWithPhoto(
         'https://img.vedu.ru/office-woman-660-1.jpg',
         {
-          caption: (data as TelegramBotData).secondMsg,
+          caption: data.secondMsg,
           ...Markup.inlineKeyboard(
-            (data as TelegramBotData).sum.map((item) => 
+            data.sum.map((item) => 
               [Markup.button.callback(item.buttonName, `amount_${item.sum}`)]
             )
           )
@@ -162,9 +176,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const user = this.getUserIdentifier(ctx);
       this.verboseLog(`User ${user} selected loan amount ${amount}`);
       
+      const data = getTelegramData();
       // Find button name from data (compare as strings to handle both number and string types)
       // Use English button name for addinfo to prevent UTF-8 encoding issues
-      const buttonNameEn = (data as TelegramBotData).sum.find(item => String(item.sum) === amount)?.buttonNameEn || `amount_${amount}`;
+      const buttonNameEn = data.sum.find(item => String(item.sum) === amount)?.buttonNameEn || `amount_${amount}`;
       
       this.trackButtonClick(ctx, buttonNameEn);
       
@@ -173,9 +188,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       this.userStates.set(userId, state);
       
       ctx.reply(
-        (data as TelegramBotData).thirdMsg,
+        data.thirdMsg,
         Markup.inlineKeyboard([
-          ...(data as TelegramBotData).historyCredit.map((item) => 
+          ...data.historyCredit.map((item) => 
             [Markup.button.callback(item.buttonName, `credit_${item.status}`)]
           ),
           [Markup.button.callback('« Назад', 'start_questionnaire')]
@@ -194,9 +209,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const user = this.getUserIdentifier(ctx);
       this.verboseLog(`User ${user} selected credit history ${creditHistory}`);
       
+      const data = getTelegramData();
       // Find button name from data (compare as strings to handle both number and string types)
       // Use English button name for addinfo to prevent UTF-8 encoding issues
-      const buttonNameEn = (data as TelegramBotData).historyCredit.find(item => String(item.status) === creditHistory)?.buttonNameEn || `credit_${creditHistory}`;
+      const buttonNameEn = data.historyCredit.find(item => String(item.status) === creditHistory)?.buttonNameEn || `credit_${creditHistory}`;
       
       this.trackButtonClick(ctx, buttonNameEn);
       
@@ -205,14 +221,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       this.userStates.set(userId, state);
       
       // Generate final link using binom - use English button name for addinfo
-      const link = this.buildFinalLink(ctx, (data as TelegramBotData).fourthButtonEn);
+      const link = this.buildFinalLink(ctx, data.fourthButtonEn);
       this.logger.log(`User ${user} clicked offer`);
       this.verboseLog(`User ${user} generated application link ${link}`);
       
       ctx.reply(
-        `${(data as TelegramBotData).fourthMsg}\n\n👉 ${link}`,
+        `${data.fourthMsg}\n\n👉 ${link}`,
         Markup.inlineKeyboard([
-          [Markup.button.url((data as TelegramBotData).fourthButton, link)],
+          [Markup.button.url(data.fourthButton, link)],
           [Markup.button.callback('« Назад', 'back_to_amount')]
         ])
       );
@@ -225,10 +241,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const user = this.getUserIdentifier(ctx);
       this.verboseLog(`User ${user} clicked back_to_amount button`);
       
+      const data = getTelegramData();
       ctx.reply(
-        (data as TelegramBotData).secondMsg,
+        data.secondMsg,
         Markup.inlineKeyboard(
-          (data as TelegramBotData).sum.map((item) => 
+          data.sum.map((item) => 
             [Markup.button.callback(item.buttonName, `amount_${item.sum}`)]
           )
         )
@@ -240,7 +257,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const user = this.getUserIdentifier(ctx);
       this.verboseLog(`User ${user} executed /day command`);
       
-      const dayOffer = (data as TelegramBotData).day;
+      const data = getTelegramData();
+      const dayOffer = data.day;
       const link = this.buildLink(dayOffer.link, ctx);
       this.verboseLog(`User ${user} generated day offer link ${link}`);
       
@@ -261,7 +279,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const user = this.getUserIdentifier(ctx);
       this.verboseLog(`User ${user} executed /week command`);
       
-      const weekOffer = (data as TelegramBotData).week;
+      const data = getTelegramData();
+      const weekOffer = data.week;
       const link = this.buildLink(weekOffer.link, ctx);
       this.verboseLog(`User ${user} generated week offer link ${link}`);
       
@@ -282,7 +301,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const user = this.getUserIdentifier(ctx);
       this.verboseLog(`User ${user} executed /how command`);
       
-      const howOffer = (data as TelegramBotData).how;
+      const data = getTelegramData();
+      const howOffer = data.how;
       const link = this.buildLink(howOffer.link, ctx);
       this.verboseLog(`User ${user} generated how offer link ${link}`);
       
@@ -299,17 +319,18 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const user = this.getUserIdentifier(ctx);
       this.verboseLog(`User ${user} executed /all command`);
       
-      const allOffers = (data as TelegramBotData).all;
+      const data = getTelegramData();
+      const allOffers = data.all;
       const buttons = allOffers.map((offer) => {
         const link = this.buildLink(offer.link, ctx);
         return [Markup.button.url(`💚 ${offer.name}`, link)];
       });
       
-      let message = `${(data as TelegramBotData).textOneAll}\n\n`;
+      let message = `${data.textOneAll}\n\n`;
       allOffers.forEach((offer, index) => {
         message += `${index + 1}. ${offer.name}\n`;
       });
-      message += `\n${(data as TelegramBotData).textSecondAll}`;
+      message += `\n${data.textSecondAll}`;
       
       this.verboseLog(`User ${user} viewing all offers (${allOffers.length} total)`);
       
@@ -321,7 +342,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const user = this.getUserIdentifier(ctx);
       this.verboseLog(`User ${user} executed /insurance command`);
       
-      ctx.reply((data as TelegramBotData).insuranceText);
+      const data = getTelegramData();
+      ctx.reply(data.insuranceText);
       
       // Send the insurance return PDF document if it exists
       try {
@@ -443,16 +465,17 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   // Helper function to build final link using binom
   private buildFinalLink(ctx: Context, buttonName: string): string {
+    const data = getTelegramData();
     const userId = ctx.from?.id;
     if (!userId) {
-      return this.buildLink((data as TelegramBotData).startAnketa, ctx);
+      return this.buildLink(data.startAnketa, ctx);
     }
 
     const state = this.userStates.get(userId);
     if (!state || !state.binomAdid || !state.binomSub2) {
       // Fallback to regular link if binom data is not available
       this.verboseLog(`User ${this.getUserIdentifier(ctx)}: binom data not available, using fallback link`);
-      return this.buildLink((data as TelegramBotData).startAnketa, ctx);
+      return this.buildLink(data.startAnketa, ctx);
     }
 
     // Always use binom to form the final URL
@@ -469,7 +492,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     // Fallback to regular link if binom URL formation fails
     this.logger.warn(`User ${this.getUserIdentifier(ctx)}: binom URL formation failed, using fallback link`);
-    return this.buildLink((data as TelegramBotData).startAnketa, ctx);
+    return this.buildLink(data.startAnketa, ctx);
   }
 
   // Helper function to track button clicks with binom
