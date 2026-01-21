@@ -20,9 +20,10 @@ export class BinomService {
      * @param adid - Telegram channel name (from deeplink)
      * @param sub2 - User Telegram alias/username
      * @param addinfo - Optional button title/name
+     * @param userId - Optional Telegram user ID for tgsubid parameter
      * @returns Complete Binom tracking URL
      */
-    formUrl(adid: string, sub2: string, addinfo?: string): string {
+    formUrl(adid: string, sub2: string, addinfo?: string, userId?: number): string {
         if (!this.binomBaseUrl) {
             this.logger.error('BINOM_URL is not configured, cannot form URL');
             return '';
@@ -34,6 +35,10 @@ export class BinomService {
             // Add required parameters
             url.searchParams.set('adid', adid);
             url.searchParams.set('sub2', sub2);
+            // tgsubid must be Telegram user ID, not alias
+            if (userId) {
+                url.searchParams.set('tgsubid', String(userId));
+            }
             
             // Add optional parameters
             const timestamp = Math.floor(Date.now() / 1000).toString();

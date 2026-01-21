@@ -1,13 +1,17 @@
 // Telegram bot data structure interface
 export interface TelegramBotData {
   startMsg: string;
+  startMsgImg: string;
   startButtonName: string;
   startButtonNameEn: string;
   secondMsg: string;
+  secondMsgImg: string;
   sum: Array<{ buttonName: string; buttonNameEn: string; sum: number }>;
   thirdMsg: string;
+  thirdMsgImg: string;
   historyCredit: Array<{ buttonName: string; buttonNameEn: string; status: string }>;
   fourthMsg: string;
+  fourthMsgImg: string;
   fourthButton: string;
   fourthButtonEn: string;
   startAnketa: string;

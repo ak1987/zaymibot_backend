@@ -1,10 +1,16 @@
 import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import { TelegramService } from './telegram.service';
+import { TelegramUsersService } from './telegram-users.service';
+import { TelegramUser } from './telegram-user.entity';
 import { BinomModule } from '../binom/binom.module';
 
 @Module({
-  imports: [BinomModule],
-  providers: [TelegramService],
+  imports: [
+    BinomModule,
+    TypeOrmModule.forFeature([TelegramUser]),
+  ],
+  providers: [TelegramService, TelegramUsersService],
   exports: [TelegramService],
 })
 export class TelegramModule {}

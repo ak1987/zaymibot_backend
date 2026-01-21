@@ -1,17 +1,49 @@
 import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { Telegraf, Markup, Context } from 'telegraf';
 import { TelegramBotData } from './telegram-data.interface';
-import { readFileSync } from 'fs';
+import { readFileSync, statSync } from 'fs';
 import * as path from 'path';
 import * as fs from 'fs';
 import { BinomService } from '../binom/binom.service';
+import { TelegramUsersService } from './telegram-users.service';
 
-const CONFIG_PATH = '/config/telegram.json';
+const CONFIG_PATH = '/data/data.json';
 
+// Cache for data.json with modification time tracking
+interface DataCache {
+  data: TelegramBotData;
+  mtimeMs: number;
+}
+
+let dataCache: DataCache = { data: {} as TelegramBotData, mtimeMs: 0 };
+
+/**
+ * Loads Telegram bot configuration from data.json file.
+ * Uses in-memory cache and only reloads when the file modification time changes,
+ * so changes to the file are automatically picked up on the next request
+ * without requiring a container restart, while minimizing disk I/O.
+ */
 export function getTelegramData(): TelegramBotData {
   try {
+    const stats = statSync(CONFIG_PATH);
+    const currentMtimeMs = stats.mtimeMs;
+
+    // Return cached data if file hasn't been modified (mtimeMs 0 ensures first load always happens)
+    if (dataCache.mtimeMs === currentMtimeMs) {
+      return dataCache.data;
+    }
+
+    // File has been modified or cache is empty (first launch) - reload
     const raw = readFileSync(CONFIG_PATH, 'utf-8');
-    return JSON.parse(raw) as TelegramBotData;
+    const data = JSON.parse(raw) as TelegramBotData;
+
+    // Update cache
+    dataCache = {
+      data,
+      mtimeMs: currentMtimeMs,
+    };
+
+    return data;
   } catch (err) {
     console.error('Ошибка при чтении telegram.json:', err);
     throw new Error(`Failed to load telegram bot data: ${err instanceof Error ? err.message : String(err)}`);
@@ -35,7 +67,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private readonly BOT_NAME = 'ЗаймиБот';
   private readonly verboseLogs: boolean;
 
-  constructor(private readonly binomService: BinomService) {
+  constructor(
+    private readonly binomService: BinomService,
+    private readonly telegramUsersService: TelegramUsersService,
+  ) {
     const BOT_TOKEN = process.env.BOT_TOKEN;
     
     if (!BOT_TOKEN) {
@@ -58,9 +93,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   private setupBotHandlers() {
     // Command: /start
-    this.bot.start((ctx) => {
+    this.bot.start(async (ctx) => {
       const user = this.getUserIdentifier(ctx);
       const userId = ctx.from?.id;
+      
+      // Track user on start (UPDATE if exists, CREATE if not)
+      if (userId) {
+        await this.trackTelegramUser(userId, ctx.from?.username || null);
+      }
       
       // Extract deep link payload (?start=payload)
       // Telegram sends /start payload when user clicks https://t.me/botname?start=payload
@@ -123,16 +163,21 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       
       const data = getTelegramData();
       const message = this.replacePlaceholders(data.startMsg, ctx);
+      const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback(data.startButtonName, 'start_questionnaire')]
+      ]);
       
-      ctx.replyWithAnimation(
-        'https://media1.tenor.com/m/4EElxXeHiZwAAAAC/forrest-gump-wave.gif',
-        {
-          caption: message,
-          ...Markup.inlineKeyboard([
-            [Markup.button.callback(data.startButtonName, 'start_questionnaire')]
-          ])
+      // Send with image if specified, otherwise send text only
+      if (data.startMsgImg?.trim().length > 0) {
+        const imagePath = path.join('/data', data.startMsgImg);
+        if (fs.existsSync(imagePath)) {
+          await ctx.replyWithPhoto({ source: imagePath }, { caption: message, ...keyboard });
+        } else {
+          await ctx.reply(message, keyboard);
         }
-      );
+      } else {
+        await ctx.reply(message, keyboard);
+      }
     });
 
     // Handle "Начнём" button click
@@ -141,6 +186,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       
       const user = this.getUserIdentifier(ctx);
       this.verboseLog(`User ${user} clicked start_questionnaire button`);
+      
+      // Track user on button click
+      const userId = ctx.from?.id;
+      if (userId) {
+        await this.trackTelegramUser(userId, ctx.from?.username || null);
+      }
       
       const data = getTelegramData();
       const buttonNameEn = data.startButtonNameEn;
@@ -152,17 +203,23 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         this.logger.error('Error in trackButtonClick:', error);
       }
       
-      ctx.replyWithPhoto(
-        'https://img.vedu.ru/office-woman-660-1.jpg',
-        {
-          caption: data.secondMsg,
-          ...Markup.inlineKeyboard(
-            data.sum.map((item) => 
-              [Markup.button.callback(item.buttonName, `amount_${item.sum}`)]
-            )
-          )
-        }
+      const keyboard = Markup.inlineKeyboard(
+        data.sum.map((item) => 
+          [Markup.button.callback(item.buttonName, `amount_${item.sum}`)]
+        )
       );
+      
+      // Send with image if specified, otherwise send text only
+      if (data.secondMsgImg?.trim().length > 0) {
+        const imagePath = path.join('/data', data.secondMsgImg);
+        if (fs.existsSync(imagePath)) {
+          await ctx.replyWithPhoto({ source: imagePath }, { caption: data.secondMsg, ...keyboard });
+        } else {
+          await ctx.reply(data.secondMsg, keyboard);
+        }
+      } else {
+        await ctx.reply(data.secondMsg, keyboard);
+      }
     });
 
     // Handle loan amount selection
@@ -171,6 +228,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       
       const userId = ctx.from?.id;
       if (!userId) return;
+      
+      // Track user on button click
+      await this.trackTelegramUser(userId, ctx.from?.username || null);
       
       const amount = ctx.match[1];
       const user = this.getUserIdentifier(ctx);
@@ -187,15 +247,24 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       state.loanAmount = amount;
       this.userStates.set(userId, state);
       
-      ctx.reply(
-        data.thirdMsg,
-        Markup.inlineKeyboard([
-          ...data.historyCredit.map((item) => 
-            [Markup.button.callback(item.buttonName, `credit_${item.status}`)]
-          ),
-          [Markup.button.callback('« Назад', 'start_questionnaire')]
-        ])
-      );
+      const keyboard = Markup.inlineKeyboard([
+        ...data.historyCredit.map((item) => 
+          [Markup.button.callback(item.buttonName, `credit_${item.status}`)]
+        ),
+        [Markup.button.callback('« Назад', 'start_questionnaire')]
+      ]);
+      
+      // Send with image if specified, otherwise send text only
+      if (data.thirdMsgImg?.trim().length > 0) {
+        const imagePath = path.join('/data', data.thirdMsgImg);
+        if (fs.existsSync(imagePath)) {
+          await ctx.replyWithPhoto({ source: imagePath }, { caption: data.thirdMsg, ...keyboard });
+        } else {
+          await ctx.reply(data.thirdMsg, keyboard);
+        }
+      } else {
+        await ctx.reply(data.thirdMsg, keyboard);
+      }
     });
 
     // Handle credit history selection
@@ -204,6 +273,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       
       const userId = ctx.from?.id;
       if (!userId) return;
+      
+      // Track user on button click
+      await this.trackTelegramUser(userId, ctx.from?.username || null);
       
       const creditHistory = ctx.match[1];
       const user = this.getUserIdentifier(ctx);
@@ -225,13 +297,23 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       this.logger.log(`User ${user} clicked offer`);
       this.verboseLog(`User ${user} generated application link ${link}`);
       
-      ctx.reply(
-        `${data.fourthMsg}\n\n👉 ${link}`,
-        Markup.inlineKeyboard([
-          [Markup.button.url(data.fourthButton, link)],
-          [Markup.button.callback('« Назад', 'back_to_amount')]
-        ])
-      );
+      const message = `${data.fourthMsg}\n\n👉 ${link}`;
+      const keyboard = Markup.inlineKeyboard([
+        [Markup.button.url(data.fourthButton, link)],
+        [Markup.button.callback('« Назад', 'back_to_amount')]
+      ]);
+      
+      // Send with image if specified, otherwise send text only
+      if (data.fourthMsgImg?.trim().length > 0) {
+        const imagePath = path.join('/data', data.fourthMsgImg);
+        if (fs.existsSync(imagePath)) {
+          await ctx.replyWithPhoto({ source: imagePath }, { caption: message, ...keyboard });
+        } else {
+          await ctx.reply(message, keyboard);
+        }
+      } else {
+        await ctx.reply(message, keyboard);
+      }
     });
 
     // Handle back to amount selection
@@ -241,21 +323,42 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const user = this.getUserIdentifier(ctx);
       this.verboseLog(`User ${user} clicked back_to_amount button`);
       
+      // Track user on button click
+      const userId = ctx.from?.id;
+      if (userId) {
+        await this.trackTelegramUser(userId, ctx.from?.username || null);
+      }
+      
       const data = getTelegramData();
-      ctx.reply(
-        data.secondMsg,
-        Markup.inlineKeyboard(
-          data.sum.map((item) => 
-            [Markup.button.callback(item.buttonName, `amount_${item.sum}`)]
-          )
+      const keyboard = Markup.inlineKeyboard(
+        data.sum.map((item) => 
+          [Markup.button.callback(item.buttonName, `amount_${item.sum}`)]
         )
       );
+      
+      // Send with image if specified, otherwise send text only
+      if (data.secondMsgImg?.trim().length > 0) {
+        const imagePath = path.join('/data', data.secondMsgImg);
+        if (fs.existsSync(imagePath)) {
+          await ctx.replyWithPhoto({ source: imagePath }, { caption: data.secondMsg, ...keyboard });
+        } else {
+          await ctx.reply(data.secondMsg, keyboard);
+        }
+      } else {
+        await ctx.reply(data.secondMsg, keyboard);
+      }
     });
 
     // Command: /day
-    this.bot.command('day', (ctx) => {
+    this.bot.command('day', async (ctx) => {
       const user = this.getUserIdentifier(ctx);
       this.verboseLog(`User ${user} executed /day command`);
+      
+      // Track user on command
+      const userId = ctx.from?.id;
+      if (userId) {
+        await this.trackTelegramUser(userId, ctx.from?.username || null);
+      }
       
       const data = getTelegramData();
       const dayOffer = data.day;
@@ -275,9 +378,15 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     });
 
     // Command: /week
-    this.bot.command('week', (ctx) => {
+    this.bot.command('week', async (ctx) => {
       const user = this.getUserIdentifier(ctx);
       this.verboseLog(`User ${user} executed /week command`);
+      
+      // Track user on command
+      const userId = ctx.from?.id;
+      if (userId) {
+        await this.trackTelegramUser(userId, ctx.from?.username || null);
+      }
       
       const data = getTelegramData();
       const weekOffer = data.week;
@@ -297,9 +406,15 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     });
 
     // Command: /how
-    this.bot.command('how', (ctx) => {
+    this.bot.command('how', async (ctx) => {
       const user = this.getUserIdentifier(ctx);
       this.verboseLog(`User ${user} executed /how command`);
+      
+      // Track user on command
+      const userId = ctx.from?.id;
+      if (userId) {
+        await this.trackTelegramUser(userId, ctx.from?.username || null);
+      }
       
       const data = getTelegramData();
       const howOffer = data.how;
@@ -315,9 +430,15 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     });
 
     // Command: /all
-    this.bot.command('all', (ctx) => {
+    this.bot.command('all', async (ctx) => {
       const user = this.getUserIdentifier(ctx);
       this.verboseLog(`User ${user} executed /all command`);
+      
+      // Track user on command
+      const userId = ctx.from?.id;
+      if (userId) {
+        await this.trackTelegramUser(userId, ctx.from?.username || null);
+      }
       
       const data = getTelegramData();
       const allOffers = data.all;
@@ -342,6 +463,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const user = this.getUserIdentifier(ctx);
       this.verboseLog(`User ${user} executed /insurance command`);
       
+      // Track user on command
+      const userId = ctx.from?.id;
+      if (userId) {
+        await this.trackTelegramUser(userId, ctx.from?.username || null);
+      }
+      
       const data = getTelegramData();
       ctx.reply(data.insuranceText);
       
@@ -363,10 +490,16 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     });
 
     // Handle any other text message
-    this.bot.on('text', (ctx) => {
+    this.bot.on('text', async (ctx) => {
       const user = this.getUserIdentifier(ctx);
       const text = ctx.message?.text || '';
       this.verboseLog(`User ${user} sent text message "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`);
+      
+      // Track user on text message
+      const userId = ctx.from?.id;
+      if (userId) {
+        await this.trackTelegramUser(userId, ctx.from?.username || null);
+      }
       
       ctx.reply(
         'Выберите команду из меню:\n\n' +
@@ -482,7 +615,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const binomUrl = this.binomService.formUrl(
       state.binomAdid,
       state.binomSub2,
-      buttonName
+      buttonName,
+      userId
     );
 
     if (binomUrl) {
@@ -517,7 +651,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const trackingUrl = this.binomService.formUrl(
         state.binomAdid,
         state.binomSub2,
-        buttonName
+        buttonName,
+        userId
       );
 
       if (trackingUrl) {
@@ -529,6 +664,18 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     } catch (error) {
       // Silently catch any errors to prevent breaking button functionality
       this.logger.error('Error in trackButtonClick:', error);
+    }
+  }
+
+  // Helper function to track Telegram user (update if exists, create if not)
+  private async trackTelegramUser(userId: number, alias?: string | null): Promise<void> {
+    try {
+      const affectedRows = await this.telegramUsersService.updateUser(userId, alias);
+      if (affectedRows === 0) {
+        await this.telegramUsersService.createUser(userId, alias);
+      }
+    } catch (error) {
+      this.logger.error('Error tracking Telegram user:', error);
     }
   }
 
