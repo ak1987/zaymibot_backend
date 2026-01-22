@@ -373,31 +373,29 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   }
 
   // Helper function to get binom parameters from user state (DRY principle)
-  // addinfo = Telegram user name (first_name), not alias, can be empty
   private getBinomParams(userId: number | undefined, username: string, userName: string): {
     adid: string;
     sub2: string;
-    addinfo: string;
   } {
     const state = userId ? this.userStates.get(userId) : undefined;
     const sub2 = state?.binomSub2 || (userId ? (username || String(userId)) : '');
     const adid = state?.binomAdid || '';
-    // addinfo = Telegram user name (first_name), not alias, can be empty
-    const addinfo = userName;
     
-    return { adid, sub2, addinfo };
+    return { adid, sub2 };
   }
 
   // Helper function to build link with user data
   // Simply adds GET parameters to existing URL (preserves domain and path)
-  private buildLink(baseLink: string, ctx: Context): string {
+  // addinfoOverride: if provided, use it instead of user name (for menu offers)
+  private buildLink(baseLink: string, ctx: Context, addinfoOverride?: string): string {
     const userId = ctx.from?.id;
     const username = ctx.from?.username || '';
     const name = ctx.from?.first_name || ''; // Telegram user name (not alias)
     
     // Get binom parameters (DRY - extracted to avoid duplication)
-    // addinfo = Telegram user name (first_name), not alias, can be empty
-    const { adid, sub2, addinfo } = this.getBinomParams(userId, username, name);
+    // addinfo = addinfoOverride (button name for menu) or Telegram user name (first_name), can be empty
+    const { adid, sub2 } = this.getBinomParams(userId, username, name);
+    const addinfo = addinfoOverride !== undefined ? addinfoOverride : name;
     
     try {
       // Use URL class to properly handle baseLink (with or without existing parameters)
@@ -440,13 +438,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       return this.buildLink(data.startAnketa, ctx);
     }
 
-    const state = this.userStates.get(userId);
-    // Allow empty adid (for /start without deeplink) but require sub2
-    if (!state || state.binomAdid === undefined || state.binomAdid === null || !state.binomSub2) {
+    // Check if binom tracking data is available (DRY principle)
+    if (!this.hasBinomTrackingData(userId)) {
       // Fallback to regular link if binom data is not available
       this.verboseLog(`User ${this.getUserIdentifier(ctx)}: binom data not available, using fallback link`);
       return this.buildLink(data.startAnketa, ctx);
     }
+
+    const state = this.userStates.get(userId);
 
     // Use startAnketa as base URL and simply add binom parameters to it
     // This preserves the original URL from data.json (domain, path, existing params)
@@ -483,26 +482,22 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private trackEvent(ctx: Context, addinfo: string, logMessage: string): void {
     try {
       const userId = ctx.from?.id;
-      const user = this.getUserIdentifier(ctx);
       
       // Log event
       this.logger.log(logMessage);
       
-      if (!userId) return;
-
-      const state = this.userStates.get(userId);
-      // Allow empty adid (for /start without deeplink) but require sub2
-      if (!state || state.binomAdid === undefined || state.binomAdid === null || !state.binomSub2) {
+      if (!this.hasBinomTrackingData(userId)) {
         // Skip tracking if binom data is not available
         return;
       }
 
+      const state = this.userStates.get(userId!);
       // Form URL and make tracking call (fire-and-forget)
       const trackingUrl = this.binomService.formTrackingUrl(
-        state.binomAdid,
-        state.binomSub2,
+        state.binomAdid!,
+        state.binomSub2!,
         addinfo,
-        userId
+        userId!
       );
 
       if (trackingUrl) {
@@ -517,6 +512,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  // Helper function to check if binom tracking data is available (DRY principle)
+  private hasBinomTrackingData(userId: number | undefined): boolean {
+    if (!userId) return false;
+    const state = this.userStates.get(userId);
+    // Allow empty adid (for /start without deeplink) but require sub2
+    return !!(state && state.binomAdid !== undefined && state.binomAdid !== null && state.binomSub2);
+  }
+
   // Helper function to track button clicks with binom
   // addinfo = button name
   private trackButtonClick(ctx: Context, buttonName: string): void {
@@ -525,11 +528,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   }
 
   // Helper function to track offer link clicks with binom
-  // addinfo = Telegram user name (first_name), not alias
-  private trackOfferClick(ctx: Context): void {
+  // addinfo = button name (for menu buttons: day, week, how, all)
+  private trackOfferClick(ctx: Context, buttonName: string): void {
     const user = this.getUserIdentifier(ctx);
-    const userName = ctx.from?.first_name || '';
-    this.trackEvent(ctx, userName, `User ${user} clicked offer link`);
+    this.trackEvent(ctx, buttonName, `User ${user} clicked offer button: ${buttonName}`);
   }
 
   // Helper function to track Telegram user (update if exists, create if not)
@@ -772,12 +774,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     
     const data = getTelegramData();
     const offer = data[command];
+    // For menu offers: addinfo = user name (first_name), not button name
     const link = this.buildLink(offer.link, ctx);
     this.verboseLog(`User ${user} generated ${command} offer link ${link}`);
     
-    // Track offer click (addinfo = Telegram user name)
+    // Track offer button click (addinfo = button name)
     try {
-      this.trackOfferClick(ctx);
+      this.trackOfferClick(ctx, offer.buttonNameEn);
     } catch (error) {
       this.logger.error('Error tracking offer click:', error);
     }
@@ -815,12 +818,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     
     const data = getTelegramData();
     const howOffer = data.how;
+    // For menu offers: addinfo = user name (first_name), not button name
     const link = this.buildLink(howOffer.link, ctx);
     this.verboseLog(`User ${user} generated how offer link ${link}`);
     
-    // Track offer click (addinfo = Telegram user name)
+    // Track offer button click (addinfo = button name)
     try {
-      this.trackOfferClick(ctx);
+      this.trackOfferClick(ctx, howOffer.buttonNameEn);
     } catch (error) {
       this.logger.error('Error tracking offer click:', error);
     }
@@ -849,14 +853,15 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const data = getTelegramData();
     const allOffers = data.all;
     
-    // Track offer click (addinfo = Telegram user name)
+    // Track offer button click (addinfo = button name)
     try {
-      this.trackOfferClick(ctx);
+      this.trackOfferClick(ctx, 'all');
     } catch (error) {
       this.logger.error('Error tracking offer click:', error);
     }
     
     const buttons = allOffers.map((offer) => {
+      // For menu offers: addinfo = user name (first_name), not offer name
       const link = this.buildLink(offer.link, ctx);
       return [Markup.button.url(`💚 ${offer.name}`, link)];
     });
