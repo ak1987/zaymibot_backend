@@ -899,7 +899,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     
     // Send the insurance return PDF document if it exists
     try {
-      const pdfPath = path.join(process.cwd(), 'data', 'insurance_return.pdf');
+      const pdfPath = '/data/insurance_return.pdf';
       
       if (fs.existsSync(pdfPath)) {
         await ctx.replyWithDocument({ source: pdfPath });
