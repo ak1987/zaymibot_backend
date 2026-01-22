@@ -98,9 +98,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const userId = ctx.from?.id;
       
       // Track user on start (UPDATE if exists, CREATE if not)
-      if (userId) {
-        await this.trackTelegramUser(userId, ctx.from?.username || null);
-      }
+      await this.trackUserFromContext(ctx);
       
       // Extract deep link payload (?start=payload)
       // Telegram sends /start payload when user clicks https://t.me/botname?start=payload
@@ -114,51 +112,22 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         }
       }
       
-      // Parse deeplink payload
+      // Parse deeplink payload and initialize state
       if (payload && userId) {
         this.verboseLog(`User ${user} executed /start command with payload: ${payload}`);
-        
-        // Parse deeplink: ch_telegramchanelname__foo_bar
-        // Split by __ to get pairs
-        const pairs = payload.split('__');
-        const state = this.userStates.get(userId) || {};
-        
-        pairs.forEach((pair) => {
-          // Split by _ to separate key and value
-          // Underscores are strictly separators, never used in keys or values
-          const parts = pair.split('_');
-          if (parts.length === 2) {
-            const key = parts[0];
-            const value = parts[1];
-            
-            // Map deeplink keys to binom data
-            if (key === 'ch') {
-              // ch_telegramchanelname -> adid = telegramchanelname
-              state.binomAdid = value;
-            } else if (key === 'sub2') {
-              state.binomSub2 = value;
-            } else if (key === 'addinfo') {
-              state.binomAddinfo = value;
-            }
-          }
-        });
-        
-        // Set sub2 to user's Telegram alias if not provided in deeplink
-        if (!state.binomSub2) {
-          state.binomSub2 = ctx.from?.username || String(userId);
-        }
-        
-        this.userStates.set(userId, state);
-        this.verboseLog(`User ${user} parsed deeplink - adid: ${state.binomAdid}, sub2: ${state.binomSub2}, addinfo: ${state.binomAddinfo}`);
+        this.parseDeeplinkPayload(payload, userId, ctx);
       } else {
         this.verboseLog(`User ${user} executed /start command`);
-        
-        // Initialize state with default sub2 if no deeplink
         if (userId) {
-          const state = this.userStates.get(userId) || {};
-          state.binomSub2 = ctx.from?.username || String(userId);
-          this.userStates.set(userId, state);
+          this.ensureUserStateInitialized(userId, ctx);
         }
+      }
+      
+      // Track /start command to Binom (fire-and-forget, wrapped in try-catch to prevent breaking command)
+      try {
+        this.trackButtonClick(ctx, 'start');
+      } catch (error) {
+        this.logger.error('Error tracking /start command:', error);
       }
       
       const data = getTelegramData();
@@ -167,17 +136,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         [Markup.button.callback(data.startButtonName, 'start_questionnaire')]
       ]);
       
-      // Send with image if specified, otherwise send text only
-      if (data.startMsgImg?.trim().length > 0) {
-        const imagePath = path.join('/data', data.startMsgImg);
-        if (fs.existsSync(imagePath)) {
-          await ctx.replyWithPhoto({ source: imagePath }, { caption: message, ...keyboard });
-        } else {
-          await ctx.reply(message, keyboard);
-        }
-      } else {
-        await ctx.reply(message, keyboard);
-      }
+      await this.sendMessageWithOptionalImage(ctx, message, keyboard, data.startMsgImg);
     });
 
     // Handle "Начнём" button click
@@ -188,10 +147,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       this.verboseLog(`User ${user} clicked start_questionnaire button`);
       
       // Track user on button click
-      const userId = ctx.from?.id;
-      if (userId) {
-        await this.trackTelegramUser(userId, ctx.from?.username || null);
-      }
+      await this.trackUserFromContext(ctx);
       
       const data = getTelegramData();
       const buttonNameEn = data.startButtonNameEn;
@@ -209,17 +165,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         )
       );
       
-      // Send with image if specified, otherwise send text only
-      if (data.secondMsgImg?.trim().length > 0) {
-        const imagePath = path.join('/data', data.secondMsgImg);
-        if (fs.existsSync(imagePath)) {
-          await ctx.replyWithPhoto({ source: imagePath }, { caption: data.secondMsg, ...keyboard });
-        } else {
-          await ctx.reply(data.secondMsg, keyboard);
-        }
-      } else {
-        await ctx.reply(data.secondMsg, keyboard);
-      }
+      await this.sendMessageWithOptionalImage(ctx, data.secondMsg, keyboard, data.secondMsgImg);
     });
 
     // Handle loan amount selection
@@ -230,7 +176,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       if (!userId) return;
       
       // Track user on button click
-      await this.trackTelegramUser(userId, ctx.from?.username || null);
+      await this.trackUserFromContext(ctx);
       
       const amount = ctx.match[1];
       const user = this.getUserIdentifier(ctx);
@@ -254,17 +200,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         [Markup.button.callback('« Назад', 'start_questionnaire')]
       ]);
       
-      // Send with image if specified, otherwise send text only
-      if (data.thirdMsgImg?.trim().length > 0) {
-        const imagePath = path.join('/data', data.thirdMsgImg);
-        if (fs.existsSync(imagePath)) {
-          await ctx.replyWithPhoto({ source: imagePath }, { caption: data.thirdMsg, ...keyboard });
-        } else {
-          await ctx.reply(data.thirdMsg, keyboard);
-        }
-      } else {
-        await ctx.reply(data.thirdMsg, keyboard);
-      }
+      await this.sendMessageWithOptionalImage(ctx, data.thirdMsg, keyboard, data.thirdMsgImg);
     });
 
     // Handle credit history selection
@@ -275,7 +211,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       if (!userId) return;
       
       // Track user on button click
-      await this.trackTelegramUser(userId, ctx.from?.username || null);
+      await this.trackUserFromContext(ctx);
       
       const creditHistory = ctx.match[1];
       const user = this.getUserIdentifier(ctx);
@@ -298,22 +234,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       this.verboseLog(`User ${user} generated application link ${link}`);
       
       const message = `${data.fourthMsg}\n\n👉 ${link}`;
+      const navigationButtons = this.getNavigationButtons();
       const keyboard = Markup.inlineKeyboard([
         [Markup.button.url(data.fourthButton, link)],
-        [Markup.button.callback('« Назад', 'back_to_amount')]
+        [Markup.button.callback('« Назад', 'back_to_amount')],
+        ...navigationButtons
       ]);
       
-      // Send with image if specified, otherwise send text only
-      if (data.fourthMsgImg?.trim().length > 0) {
-        const imagePath = path.join('/data', data.fourthMsgImg);
-        if (fs.existsSync(imagePath)) {
-          await ctx.replyWithPhoto({ source: imagePath }, { caption: message, ...keyboard });
-        } else {
-          await ctx.reply(message, keyboard);
-        }
-      } else {
-        await ctx.reply(message, keyboard);
-      }
+      await this.sendMessageWithOptionalImage(ctx, message, keyboard, data.fourthMsgImg);
     });
 
     // Handle back to amount selection
@@ -324,10 +252,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       this.verboseLog(`User ${user} clicked back_to_amount button`);
       
       // Track user on button click
-      const userId = ctx.from?.id;
-      if (userId) {
-        await this.trackTelegramUser(userId, ctx.from?.username || null);
-      }
+      await this.trackUserFromContext(ctx);
       
       const data = getTelegramData();
       const keyboard = Markup.inlineKeyboard(
@@ -336,157 +261,58 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         )
       );
       
-      // Send with image if specified, otherwise send text only
-      if (data.secondMsgImg?.trim().length > 0) {
-        const imagePath = path.join('/data', data.secondMsgImg);
-        if (fs.existsSync(imagePath)) {
-          await ctx.replyWithPhoto({ source: imagePath }, { caption: data.secondMsg, ...keyboard });
-        } else {
-          await ctx.reply(data.secondMsg, keyboard);
-        }
-      } else {
-        await ctx.reply(data.secondMsg, keyboard);
+      await this.sendMessageWithOptionalImage(ctx, data.secondMsg, keyboard, data.secondMsgImg);
+    });
+
+    // Handle navigation button clicks
+    this.bot.action(/^nav_(.+)$/, async (ctx) => {
+      await this.safeAnswerCbQuery(ctx);
+      
+      const command = ctx.match[1];
+      const user = this.getUserIdentifier(ctx);
+      this.verboseLog(`User ${user} clicked navigation button: ${command}`);
+      
+      // Track user on button click
+      await this.trackUserFromContext(ctx);
+      
+      // Execute the corresponding command using map-based routing
+      const commandHandlers: Record<string, (ctx: Context) => Promise<void>> = {
+        day: this.handleDayCommand.bind(this),
+        week: this.handleWeekCommand.bind(this),
+        how: this.handleHowCommand.bind(this),
+        all: this.handleAllCommand.bind(this),
+        insurance: this.handleInsuranceCommand.bind(this),
+      };
+
+      const handler = commandHandlers[command];
+      if (handler) {
+        await handler(ctx);
       }
     });
 
     // Command: /day
     this.bot.command('day', async (ctx) => {
-      const user = this.getUserIdentifier(ctx);
-      this.verboseLog(`User ${user} executed /day command`);
-      
-      // Track user on command
-      const userId = ctx.from?.id;
-      if (userId) {
-        await this.trackTelegramUser(userId, ctx.from?.username || null);
-      }
-      
-      const data = getTelegramData();
-      const dayOffer = data.day;
-      const link = this.buildLink(dayOffer.link, ctx);
-      this.verboseLog(`User ${user} generated day offer link ${link}`);
-      
-      const message = this.replacePlaceholders(dayOffer.text, ctx, {
-        '%sumuser%': `до ${dayOffer.amount} ₽`
-      });
-      
-      ctx.reply(
-        `${message}\n\n👉 ${link}`,
-        Markup.inlineKeyboard([
-          [Markup.button.url(dayOffer.buttonName, link)]
-        ])
-      );
+      await this.handleDayCommand(ctx);
     });
 
     // Command: /week
     this.bot.command('week', async (ctx) => {
-      const user = this.getUserIdentifier(ctx);
-      this.verboseLog(`User ${user} executed /week command`);
-      
-      // Track user on command
-      const userId = ctx.from?.id;
-      if (userId) {
-        await this.trackTelegramUser(userId, ctx.from?.username || null);
-      }
-      
-      const data = getTelegramData();
-      const weekOffer = data.week;
-      const link = this.buildLink(weekOffer.link, ctx);
-      this.verboseLog(`User ${user} generated week offer link ${link}`);
-      
-      const message = this.replacePlaceholders(weekOffer.text, ctx, {
-        '%sumuser%': `до ${weekOffer.amount} ₽`
-      });
-      
-      ctx.reply(
-        `${message}\n\n👉 ${link}`,
-        Markup.inlineKeyboard([
-          [Markup.button.url(weekOffer.buttonName, link)]
-        ])
-      );
+      await this.handleWeekCommand(ctx);
     });
 
     // Command: /how
     this.bot.command('how', async (ctx) => {
-      const user = this.getUserIdentifier(ctx);
-      this.verboseLog(`User ${user} executed /how command`);
-      
-      // Track user on command
-      const userId = ctx.from?.id;
-      if (userId) {
-        await this.trackTelegramUser(userId, ctx.from?.username || null);
-      }
-      
-      const data = getTelegramData();
-      const howOffer = data.how;
-      const link = this.buildLink(howOffer.link, ctx);
-      this.verboseLog(`User ${user} generated how offer link ${link}`);
-      
-      ctx.reply(
-        `${howOffer.textOne}\n\n👉 ${link}\n\n${howOffer.textSecond}`,
-        Markup.inlineKeyboard([
-          [Markup.button.url(howOffer.buttonName, link)]
-        ])
-      );
+      await this.handleHowCommand(ctx);
     });
 
     // Command: /all
     this.bot.command('all', async (ctx) => {
-      const user = this.getUserIdentifier(ctx);
-      this.verboseLog(`User ${user} executed /all command`);
-      
-      // Track user on command
-      const userId = ctx.from?.id;
-      if (userId) {
-        await this.trackTelegramUser(userId, ctx.from?.username || null);
-      }
-      
-      const data = getTelegramData();
-      const allOffers = data.all;
-      const buttons = allOffers.map((offer) => {
-        const link = this.buildLink(offer.link, ctx);
-        return [Markup.button.url(`💚 ${offer.name}`, link)];
-      });
-      
-      let message = `${data.textOneAll}\n\n`;
-      allOffers.forEach((offer, index) => {
-        message += `${index + 1}. ${offer.name}\n`;
-      });
-      message += `\n${data.textSecondAll}`;
-      
-      this.verboseLog(`User ${user} viewing all offers (${allOffers.length} total)`);
-      
-      ctx.reply(message, Markup.inlineKeyboard(buttons));
+      await this.handleAllCommand(ctx);
     });
 
     // Command: /insurance
     this.bot.command('insurance', async (ctx) => {
-      const user = this.getUserIdentifier(ctx);
-      this.verboseLog(`User ${user} executed /insurance command`);
-      
-      // Track user on command
-      const userId = ctx.from?.id;
-      if (userId) {
-        await this.trackTelegramUser(userId, ctx.from?.username || null);
-      }
-      
-      const data = getTelegramData();
-      ctx.reply(data.insuranceText);
-      
-      // Send the insurance return PDF document if it exists
-      try {
-        const pdfPath = path.join(process.cwd(), 'src', 'files', 'insurance_return.pdf');
-        
-        if (fs.existsSync(pdfPath)) {
-          await ctx.replyWithDocument({ source: pdfPath });
-          this.verboseLog(`User ${user} received insurance PDF document`);
-        } else {
-          this.logger.warn('Insurance PDF file not found at: ' + pdfPath);
-          this.verboseLog(`User ${user} requested insurance PDF but file not found`);
-        }
-      } catch (error) {
-        this.logger.error('Error sending insurance PDF:', error);
-        this.verboseLog(`User ${user} encountered error while requesting insurance PDF`);
-      }
+      await this.handleInsuranceCommand(ctx);
     });
 
     // Handle any other text message
@@ -496,10 +322,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       this.verboseLog(`User ${user} sent text message "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`);
       
       // Track user on text message
-      const userId = ctx.from?.id;
-      if (userId) {
-        await this.trackTelegramUser(userId, ctx.from?.username || null);
-      }
+      await this.trackUserFromContext(ctx);
       
       ctx.reply(
         'Выберите команду из меню:\n\n' +
@@ -549,49 +372,25 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   // Helper function to build link with user data
   private buildLink(baseLink: string, ctx: Context): string {
-    const userId = ctx.from?.id || '';
+    const userId = ctx.from?.id;
     const username = ctx.from?.username || '';
     const name = ctx.from?.first_name || '';
     
-    let link = `${baseLink}&uid=${userId}&alias=${username}&name=${encodeURIComponent(name)}`;
+    // Start with base link and add uid, alias, name (non-binom parameters)
+    let link = `${baseLink}&uid=${userId || ''}&alias=${encodeURIComponent(username)}&name=${encodeURIComponent(name)}`;
     
-    // Add binom parameters if available
-    const binomSource = process.env.BINOM_SOURCE;
-    if (userId) {
-      const state = this.userStates.get(userId);
-      if (state) {
-        // Add source parameter - use state.binomSub2 which has fallback to userId
-        if (binomSource) {
-          const sub2 = state.binomSub2 || String(userId);
-          link += `&source=${binomSource}&sub2=${sub2}`;
-        }
-        // Add adid parameter (from deeplink)
-        if (state.binomAdid) {
-          link += `&adid=${state.binomAdid}`;
-        } else {
-          link += `&adid=`;
-        }
-        // Add addinfo parameter (from deeplink or button name)
-        if (state.binomAddinfo) {
-          link += `&addinfo=${state.binomAddinfo}`;
-        } else {
-          link += `&addinfo=`;
-        }
-      } else {
-        // If no state, use username or userId as fallback for sub2
-        if (binomSource) {
-          const sub2 = username || String(userId);
-          link += `&source=${binomSource}&sub2=${sub2}`;
-        }
-        link += `&adid=&addinfo=`;
-      }
-    } else {
-      // If no userId, add empty parameters
-      if (binomSource) {
-        link += `&source=${binomSource}&sub2=`;
-      }
-      link += `&adid=&addinfo=`;
-    }
+    // Get user state for binom parameters
+    const state = userId ? this.userStates.get(userId) : undefined;
+    
+    // Determine sub2 value (user alias)
+    const sub2 = state?.binomSub2 || (userId ? (username || String(userId)) : '');
+    
+    // Get binom parameters from state
+    const adid = state?.binomAdid || '';
+    const addinfo = state?.binomAddinfo || '';
+    
+    // Add binom parameters using BinomService (DRY principle)
+    link = this.binomService.addBinomParamsToUrl(link, adid, sub2, addinfo, userId || undefined);
     
     return link;
   }
@@ -605,22 +404,24 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     const state = this.userStates.get(userId);
-    if (!state || !state.binomAdid || !state.binomSub2) {
+    // Allow empty adid (for /start without deeplink) but require sub2
+    if (!state || state.binomAdid === undefined || state.binomAdid === null || !state.binomSub2) {
       // Fallback to regular link if binom data is not available
       this.verboseLog(`User ${this.getUserIdentifier(ctx)}: binom data not available, using fallback link`);
       return this.buildLink(data.startAnketa, ctx);
     }
 
-    // Always use binom to form the final URL
-    const binomUrl = this.binomService.formUrl(
-      state.binomAdid,
+    // Always use binom to form the final URL (user-facing link)
+    // adid can be empty string if no deeplink was provided
+    const binomUrl = this.binomService.formUserUrl(
+      state.binomAdid || '', // Ensure empty string if undefined/null
       state.binomSub2,
       buttonName,
       userId
     );
 
     if (binomUrl) {
-      this.verboseLog(`User ${this.getUserIdentifier(ctx)}: using binom link with adid=${state.binomAdid}, sub2=${state.binomSub2}`);
+      this.verboseLog(`User ${this.getUserIdentifier(ctx)}: using binom link with adid=${state.binomAdid || ''}, sub2=${state.binomSub2}`);
       return binomUrl;
     }
 
@@ -642,13 +443,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       if (!userId) return;
 
       const state = this.userStates.get(userId);
-      if (!state || !state.binomAdid || !state.binomSub2) {
+      // Allow empty adid (for /start without deeplink) but require sub2
+      if (!state || state.binomAdid === undefined || state.binomAdid === null || !state.binomSub2) {
         // Skip tracking if binom data is not available
         return;
       }
 
       // Form URL and make tracking call (fire-and-forget)
-      const trackingUrl = this.binomService.formUrl(
+      const trackingUrl = this.binomService.formTrackingUrl(
         state.binomAdid,
         state.binomSub2,
         buttonName,
@@ -677,6 +479,65 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     } catch (error) {
       this.logger.error('Error tracking Telegram user:', error);
     }
+  }
+
+  // Helper function to track user from context (extracts userId and username automatically)
+  private async trackUserFromContext(ctx: Context): Promise<void> {
+    const userId = ctx.from?.id;
+    if (userId) {
+      await this.trackTelegramUser(userId, ctx.from?.username || null);
+    }
+  }
+
+  // Helper function to parse deeplink payload and update user state
+  private parseDeeplinkPayload(payload: string, userId: number, ctx: Context): void {
+    // Parse deeplink: ch_telegramchanelname__foo_bar
+    // Split by __ to get pairs
+    const pairs = payload.split('__');
+    const state = this.userStates.get(userId) || {};
+    
+    pairs.forEach((pair) => {
+      // Split by _ to separate key and value
+      // Underscores are strictly separators, never used in keys or values
+      const parts = pair.split('_');
+      if (parts.length === 2) {
+        const key = parts[0];
+        const value = parts[1];
+        
+        // Map deeplink keys to binom data
+        if (key === 'ch') {
+          // ch_telegramchanelname -> adid = telegramchanelname
+          state.binomAdid = value;
+        } else if (key === 'sub2') {
+          state.binomSub2 = value;
+        } else if (key === 'addinfo') {
+          state.binomAddinfo = value;
+        }
+      }
+    });
+    
+    // Ensure required state fields are set
+    this.ensureUserStateInitialized(userId, ctx);
+    
+    const user = this.getUserIdentifier(ctx);
+    this.verboseLog(`User ${user} parsed deeplink - adid: ${state.binomAdid}, sub2: ${state.binomSub2}, addinfo: ${state.binomAddinfo}`);
+  }
+
+  // Helper function to ensure user state is initialized with default values
+  private ensureUserStateInitialized(userId: number, ctx: Context): void {
+    const state = this.userStates.get(userId) || {};
+    
+    // Set sub2 to user's Telegram alias if not already set
+    if (!state.binomSub2) {
+      state.binomSub2 = ctx.from?.username || String(userId);
+    }
+    
+    // Set empty adid if not already set (to allow Binom tracking)
+    if (state.binomAdid === undefined || state.binomAdid === null) {
+      state.binomAdid = '';
+    }
+    
+    this.userStates.set(userId, state);
   }
 
   // Helper function to get user's first name
@@ -743,5 +604,168 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
     
     return result;
+  }
+
+  // Helper function to send message with optional image
+  private async sendMessageWithOptionalImage(
+    ctx: Context,
+    message: string,
+    keyboard: any,
+    imagePath?: string
+  ): Promise<void> {
+    if (imagePath?.trim().length > 0) {
+      const fullImagePath = path.join('/data', imagePath);
+      if (fs.existsSync(fullImagePath)) {
+        await ctx.replyWithPhoto({ source: fullImagePath }, { caption: message, ...keyboard });
+        return;
+      }
+    }
+    await ctx.reply(message, keyboard);
+  }
+
+  // Helper function to get navigation buttons for one-step sections
+  // Excludes the current command to avoid doubling
+  private getNavigationButtons(excludeCommand?: string): any[] {
+    const buttons = [
+      { text: 'Топ 5 займов', command: 'all' },
+      { text: 'Все займы', command: 'how' },
+      { text: 'Займ недели', command: 'week' },
+      { text: 'Займ дня', command: 'day' },
+      { text: 'Отмена страховки', command: 'insurance' },
+    ];
+
+    // Filter out the excluded command
+    const filteredButtons = excludeCommand
+      ? buttons.filter(btn => btn.command !== excludeCommand)
+      : buttons;
+
+    // Return as inline keyboard buttons
+    return filteredButtons.map(btn => [
+      Markup.button.callback(btn.text, `nav_${btn.command}`)
+    ]);
+  }
+
+  // Generic handler for day/week commands (they have identical structure)
+  private async handleDayOrWeekCommand(ctx: Context, command: 'day' | 'week'): Promise<void> {
+    const user = this.getUserIdentifier(ctx);
+    this.verboseLog(`User ${user} executed /${command} command`);
+    
+    // Track user on command
+    await this.trackUserFromContext(ctx);
+    
+    const data = getTelegramData();
+    const offer = data[command];
+    const link = this.buildLink(offer.link, ctx);
+    this.verboseLog(`User ${user} generated ${command} offer link ${link}`);
+    
+    const message = this.replacePlaceholders(offer.text, ctx, {
+      '%sumuser%': `до ${offer.amount} ₽`
+    });
+    
+    const navigationButtons = this.getNavigationButtons(command);
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.url(offer.buttonName, link)],
+      ...navigationButtons
+    ]);
+    
+    await ctx.reply(`${message}\n\n👉 ${link}`, keyboard);
+  }
+
+  // Handler for /day command
+  private async handleDayCommand(ctx: Context): Promise<void> {
+    await this.handleDayOrWeekCommand(ctx, 'day');
+  }
+
+  // Handler for /week command
+  private async handleWeekCommand(ctx: Context): Promise<void> {
+    await this.handleDayOrWeekCommand(ctx, 'week');
+  }
+
+  // Handler for /how command
+  private async handleHowCommand(ctx: Context): Promise<void> {
+    const user = this.getUserIdentifier(ctx);
+    this.verboseLog(`User ${user} executed /how command`);
+    
+    // Track user on command
+    await this.trackUserFromContext(ctx);
+    
+    const data = getTelegramData();
+    const howOffer = data.how;
+    const link = this.buildLink(howOffer.link, ctx);
+    this.verboseLog(`User ${user} generated how offer link ${link}`);
+    
+    const navigationButtons = this.getNavigationButtons('how');
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.url(howOffer.buttonName, link)],
+      ...navigationButtons
+    ]);
+    
+    await ctx.reply(
+      `${howOffer.textOne}\n\n👉 ${link}\n\n${howOffer.textSecond}`,
+      keyboard
+    );
+  }
+
+  // Handler for /all command
+  private async handleAllCommand(ctx: Context): Promise<void> {
+    const user = this.getUserIdentifier(ctx);
+    this.verboseLog(`User ${user} executed /all command`);
+    
+    // Track user on command
+    await this.trackUserFromContext(ctx);
+    
+    const data = getTelegramData();
+    const allOffers = data.all;
+    const buttons = allOffers.map((offer) => {
+      const link = this.buildLink(offer.link, ctx);
+      return [Markup.button.url(`💚 ${offer.name}`, link)];
+    });
+    
+    let message = `${data.textOneAll}\n\n`;
+    allOffers.forEach((offer, index) => {
+      message += `${index + 1}. ${offer.name}\n`;
+    });
+    message += `\n${data.textSecondAll}`;
+    
+    this.verboseLog(`User ${user} viewing all offers (${allOffers.length} total)`);
+    
+    const navigationButtons = this.getNavigationButtons('all');
+    const keyboard = Markup.inlineKeyboard([
+      ...buttons,
+      ...navigationButtons
+    ]);
+    
+    await ctx.reply(message, keyboard);
+  }
+
+  // Handler for /insurance command
+  private async handleInsuranceCommand(ctx: Context): Promise<void> {
+    const user = this.getUserIdentifier(ctx);
+    this.verboseLog(`User ${user} executed /insurance command`);
+    
+    // Track user on command
+    await this.trackUserFromContext(ctx);
+    
+    const data = getTelegramData();
+    const navigationButtons = this.getNavigationButtons('insurance');
+    const keyboard = Markup.inlineKeyboard(navigationButtons);
+    
+    await ctx.reply(data.insuranceText, keyboard);
+    
+    // Send the insurance return PDF document if it exists
+    try {
+      const pdfPath = path.join(process.cwd(), 'src', 'files', 'insurance_return.pdf');
+      
+      if (fs.existsSync(pdfPath)) {
+        await ctx.replyWithDocument({ source: pdfPath });
+        this.verboseLog(`User ${user} received insurance PDF document`);
+      } else {
+        this.logger.warn('Insurance PDF file not found at: ' + pdfPath);
+        this.verboseLog(`User ${user} requested insurance PDF but file not found`);
+      }
+    } catch (error) {
+      this.logger.error('Error sending insurance PDF:', error);
+      this.verboseLog(`User ${user} encountered error while requesting insurance PDF`);
+    }
   }
 }
