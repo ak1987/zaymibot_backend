@@ -57,6 +57,7 @@ interface UserState {
   binomAdid?: string; // Telegram channel name from deeplink
   binomSub2?: string; // User Telegram alias
   binomAddinfo?: string; // Button title (optional)
+  lastMessageId?: number; // Last message ID for deletion
 }
 
 @Injectable()
@@ -324,7 +325,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       // Track user on text message
       await this.trackUserFromContext(ctx);
       
-      ctx.reply(
+      await this.sendMessageAndSaveId(
+        ctx,
         'Выберите команду из меню:\n\n' +
         '💚 /day - Займ дня\n' +
         '💚 /week - Займ недели\n' +
@@ -370,32 +372,67 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     this.bot.stop('SIGTERM');
   }
 
+  // Helper function to get binom parameters from user state (DRY principle)
+  // addinfo = Telegram user name (first_name), not alias, can be empty
+  private getBinomParams(userId: number | undefined, username: string, userName: string): {
+    adid: string;
+    sub2: string;
+    addinfo: string;
+  } {
+    const state = userId ? this.userStates.get(userId) : undefined;
+    const sub2 = state?.binomSub2 || (userId ? (username || String(userId)) : '');
+    const adid = state?.binomAdid || '';
+    // addinfo = Telegram user name (first_name), not alias, can be empty
+    const addinfo = userName;
+    
+    return { adid, sub2, addinfo };
+  }
+
   // Helper function to build link with user data
+  // Simply adds GET parameters to existing URL (preserves domain and path)
   private buildLink(baseLink: string, ctx: Context): string {
     const userId = ctx.from?.id;
     const username = ctx.from?.username || '';
-    const name = ctx.from?.first_name || '';
+    const name = ctx.from?.first_name || ''; // Telegram user name (not alias)
     
-    // Start with base link and add uid, alias, name (non-binom parameters)
-    let link = `${baseLink}&uid=${userId || ''}&alias=${encodeURIComponent(username)}&name=${encodeURIComponent(name)}`;
+    // Get binom parameters (DRY - extracted to avoid duplication)
+    // addinfo = Telegram user name (first_name), not alias, can be empty
+    const { adid, sub2, addinfo } = this.getBinomParams(userId, username, name);
     
-    // Get user state for binom parameters
-    const state = userId ? this.userStates.get(userId) : undefined;
-    
-    // Determine sub2 value (user alias)
-    const sub2 = state?.binomSub2 || (userId ? (username || String(userId)) : '');
-    
-    // Get binom parameters from state
-    const adid = state?.binomAdid || '';
-    const addinfo = state?.binomAddinfo || '';
-    
-    // Add binom parameters using BinomService (DRY principle)
-    link = this.binomService.addBinomParamsToUrl(link, adid, sub2, addinfo, userId || undefined);
-    
-    return link;
+    try {
+      // Use URL class to properly handle baseLink (with or without existing parameters)
+      const url = new URL(baseLink);
+      
+      // Add non-binom parameters (uid, alias, name)
+      url.searchParams.set('uid', String(userId || ''));
+      url.searchParams.set('alias', username);
+      url.searchParams.set('name', name);
+      
+      // Add binom parameters to existing URL (preserves domain, path, existing params)
+      // addBinomParamsToUrl uses URL class internally, so it properly handles ? vs &
+      const linkWithBinom = this.binomService.addBinomParamsToUrl(
+        url.toString(),
+        adid,
+        sub2,
+        addinfo,
+        userId || undefined
+      );
+      
+      return linkWithBinom;
+    } catch (error) {
+      // Fallback: manually check for ? to use & or ?
+      this.logger.warn(`Failed to parse baseLink as URL: ${baseLink}, using string concatenation`);
+      const separator = baseLink.includes('?') ? '&' : '?';
+      let link = `${baseLink}${separator}uid=${userId || ''}&alias=${encodeURIComponent(username)}&name=${encodeURIComponent(name)}`;
+      
+      // Add binom parameters (check again for ? after adding uid/alias/name)
+      link = this.binomService.addBinomParamsToUrl(link, adid, sub2, addinfo, userId || undefined);
+      return link;
+    }
   }
 
   // Helper function to build final link using binom
+  // Simply adds binom GET parameters to startAnketa URL (preserves domain and path)
   private buildFinalLink(ctx: Context, buttonName: string): string {
     const data = getTelegramData();
     const userId = ctx.from?.id;
@@ -411,17 +448,28 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       return this.buildLink(data.startAnketa, ctx);
     }
 
-    // Always use binom to form the final URL (user-facing link)
-    // adid can be empty string if no deeplink was provided
-    const binomUrl = this.binomService.formUserUrl(
-      state.binomAdid || '', // Ensure empty string if undefined/null
-      state.binomSub2,
-      buttonName,
+    // Use startAnketa as base URL and simply add binom parameters to it
+    // This preserves the original URL from data.json (domain, path, existing params)
+    // addBinomParamsToUrl uses URL class internally, so it properly handles ? vs &
+    const baseUrl = data.startAnketa;
+    const adid = state.binomAdid || '';
+    const sub2 = state.binomSub2;
+    // addinfo = Telegram user name (first_name), not alias, can be empty
+    // Button name is used ONLY for tracker, not for user-facing links
+    const userName = ctx.from?.first_name || '';
+    const addinfo = userName;
+    
+    // Add binom parameters to the startAnketa URL (preserves domain)
+    const binomUrl = this.binomService.addBinomParamsToUrl(
+      baseUrl,
+      adid,
+      sub2,
+      addinfo,
       userId
     );
 
     if (binomUrl) {
-      this.verboseLog(`User ${this.getUserIdentifier(ctx)}: using binom link with adid=${state.binomAdid || ''}, sub2=${state.binomSub2}`);
+      this.verboseLog(`User ${this.getUserIdentifier(ctx)}: using binom link with adid=${adid}, sub2=${sub2}, baseUrl=${baseUrl}`);
       return binomUrl;
     }
 
@@ -430,15 +478,15 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return this.buildLink(data.startAnketa, ctx);
   }
 
-  // Helper function to track button clicks with binom
+  // Internal method to track events with binom (DRY principle)
   // Fire-and-forget: we don't wait for the HTTP call to complete
-  private trackButtonClick(ctx: Context, buttonName: string): void {
+  private trackEvent(ctx: Context, addinfo: string, logMessage: string): void {
     try {
       const userId = ctx.from?.id;
       const user = this.getUserIdentifier(ctx);
       
-      // Log button click
-      this.logger.log(`User ${user} clicked button: ${buttonName}`);
+      // Log event
+      this.logger.log(logMessage);
       
       if (!userId) return;
 
@@ -453,7 +501,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const trackingUrl = this.binomService.formTrackingUrl(
         state.binomAdid,
         state.binomSub2,
-        buttonName,
+        addinfo,
         userId
       );
 
@@ -464,9 +512,24 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         });
       }
     } catch (error) {
-      // Silently catch any errors to prevent breaking button functionality
-      this.logger.error('Error in trackButtonClick:', error);
+      // Silently catch any errors to prevent breaking functionality
+      this.logger.error('Error in trackEvent:', error);
     }
+  }
+
+  // Helper function to track button clicks with binom
+  // addinfo = button name
+  private trackButtonClick(ctx: Context, buttonName: string): void {
+    const user = this.getUserIdentifier(ctx);
+    this.trackEvent(ctx, buttonName, `User ${user} clicked button: ${buttonName}`);
+  }
+
+  // Helper function to track offer link clicks with binom
+  // addinfo = Telegram user name (first_name), not alias
+  private trackOfferClick(ctx: Context): void {
+    const user = this.getUserIdentifier(ctx);
+    const userName = ctx.from?.first_name || '';
+    this.trackEvent(ctx, userName, `User ${user} clicked offer link`);
   }
 
   // Helper function to track Telegram user (update if exists, create if not)
@@ -606,6 +669,42 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return result;
   }
 
+  // Helper function to delete previous message if exists
+  private async deletePreviousMessage(ctx: Context, userId: number): Promise<void> {
+    try {
+      const state = this.userStates.get(userId);
+      if (state?.lastMessageId && ctx.chat) {
+        await ctx.telegram.deleteMessage(ctx.chat.id, state.lastMessageId);
+        this.verboseLog(`Deleted previous message ${state.lastMessageId} for user ${userId}`);
+      }
+    } catch (error: any) {
+      // Ignore errors (message might be already deleted or too old)
+      // Telegram allows deleting messages only within 48 hours
+      if (error?.response?.error_code !== 400 && !error?.response?.description?.includes('message to delete not found')) {
+        this.verboseLog(`Could not delete previous message for user ${userId}: ${error?.message || error}`);
+      }
+    }
+  }
+
+  // Helper function to send message and save its ID for future deletion
+  private async sendMessageAndSaveId(ctx: Context, message: string, keyboard?: any): Promise<void> {
+    const userId = ctx.from?.id;
+    
+    // Delete previous message if exists
+    if (userId) {
+      await this.deletePreviousMessage(ctx, userId);
+    }
+    
+    const sentMessage = await ctx.reply(message, keyboard);
+    
+    // Save message ID for future deletion
+    if (userId && sentMessage?.message_id) {
+      const state = this.userStates.get(userId) || {};
+      state.lastMessageId = sentMessage.message_id;
+      this.userStates.set(userId, state);
+    }
+  }
+
   // Helper function to send message with optional image
   private async sendMessageWithOptionalImage(
     ctx: Context,
@@ -613,14 +712,32 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     keyboard: any,
     imagePath?: string
   ): Promise<void> {
+    const userId = ctx.from?.id;
+    
+    // Delete previous message if exists
+    if (userId) {
+      await this.deletePreviousMessage(ctx, userId);
+    }
+    
+    let sentMessage: any;
+    
     if (imagePath?.trim().length > 0) {
       const fullImagePath = path.join('/data', imagePath);
       if (fs.existsSync(fullImagePath)) {
-        await ctx.replyWithPhoto({ source: fullImagePath }, { caption: message, ...keyboard });
-        return;
+        sentMessage = await ctx.replyWithPhoto({ source: fullImagePath }, { caption: message, ...keyboard });
+      } else {
+        sentMessage = await ctx.reply(message, keyboard);
       }
+    } else {
+      sentMessage = await ctx.reply(message, keyboard);
     }
-    await ctx.reply(message, keyboard);
+    
+    // Save message ID for future deletion
+    if (userId && sentMessage?.message_id) {
+      const state = this.userStates.get(userId) || {};
+      state.lastMessageId = sentMessage.message_id;
+      this.userStates.set(userId, state);
+    }
   }
 
   // Helper function to get navigation buttons for one-step sections
@@ -658,6 +775,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const link = this.buildLink(offer.link, ctx);
     this.verboseLog(`User ${user} generated ${command} offer link ${link}`);
     
+    // Track offer click (addinfo = Telegram user name)
+    try {
+      this.trackOfferClick(ctx);
+    } catch (error) {
+      this.logger.error('Error tracking offer click:', error);
+    }
+    
     const message = this.replacePlaceholders(offer.text, ctx, {
       '%sumuser%': `до ${offer.amount} ₽`
     });
@@ -668,7 +792,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       ...navigationButtons
     ]);
     
-    await ctx.reply(`${message}\n\n👉 ${link}`, keyboard);
+    await this.sendMessageAndSaveId(ctx, `${message}\n\n👉 ${link}`, keyboard);
   }
 
   // Handler for /day command
@@ -694,13 +818,21 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const link = this.buildLink(howOffer.link, ctx);
     this.verboseLog(`User ${user} generated how offer link ${link}`);
     
+    // Track offer click (addinfo = Telegram user name)
+    try {
+      this.trackOfferClick(ctx);
+    } catch (error) {
+      this.logger.error('Error tracking offer click:', error);
+    }
+    
     const navigationButtons = this.getNavigationButtons('how');
     const keyboard = Markup.inlineKeyboard([
       [Markup.button.url(howOffer.buttonName, link)],
       ...navigationButtons
     ]);
     
-    await ctx.reply(
+    await this.sendMessageAndSaveId(
+      ctx,
       `${howOffer.textOne}\n\n👉 ${link}\n\n${howOffer.textSecond}`,
       keyboard
     );
@@ -716,6 +848,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     
     const data = getTelegramData();
     const allOffers = data.all;
+    
+    // Track offer click (addinfo = Telegram user name)
+    try {
+      this.trackOfferClick(ctx);
+    } catch (error) {
+      this.logger.error('Error tracking offer click:', error);
+    }
+    
     const buttons = allOffers.map((offer) => {
       const link = this.buildLink(offer.link, ctx);
       return [Markup.button.url(`💚 ${offer.name}`, link)];
@@ -735,7 +875,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       ...navigationButtons
     ]);
     
-    await ctx.reply(message, keyboard);
+    await this.sendMessageAndSaveId(ctx, message, keyboard);
   }
 
   // Handler for /insurance command
@@ -750,11 +890,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const navigationButtons = this.getNavigationButtons('insurance');
     const keyboard = Markup.inlineKeyboard(navigationButtons);
     
-    await ctx.reply(data.insuranceText, keyboard);
+    await this.sendMessageAndSaveId(ctx, data.insuranceText, keyboard);
     
     // Send the insurance return PDF document if it exists
     try {
-      const pdfPath = path.join(process.cwd(), 'src', 'files', 'insurance_return.pdf');
+      const pdfPath = path.join(process.cwd(), 'data', 'insurance_return.pdf');
       
       if (fs.existsSync(pdfPath)) {
         await ctx.replyWithDocument({ source: pdfPath });
