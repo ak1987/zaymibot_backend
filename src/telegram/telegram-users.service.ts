@@ -46,4 +46,28 @@ export class TelegramUsersService {
 
     return result.affected || 0;
   }
+
+  /**
+   * Returns all users who have not yet received all 4 scheduled messages (message_status_id < 4).
+   */
+  async getUsersWithPendingScheduledMessages(): Promise<TelegramUser[]> {
+    return this.telegramUserRepository
+      .createQueryBuilder('u')
+      .where('u.message_status_id < :maxStatus', { maxStatus: 4 })
+      .orderBy('u.created_at', 'ASC')
+      .getMany();
+  }
+
+  /**
+   * Sets message_status_id for a user (after sending a scheduled message).
+   */
+  async setMessageStatusId(userId: number, statusId: number): Promise<number> {
+    const result = await this.telegramUserRepository
+      .createQueryBuilder()
+      .update(TelegramUser)
+      .set({ message_status_id: statusId, updated_at: () => 'NOW()' })
+      .where('id = :userId', { userId })
+      .execute();
+    return result.affected ?? 0;
+  }
 }

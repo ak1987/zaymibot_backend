@@ -8,6 +8,9 @@ export class TelegramUser {
   @Column({ type: 'varchar', length: 32, nullable: true })
   alias: string | null; // Telegram username/alias
 
+  @Column({ type: 'smallint', default: 0 })
+  message_status_id: number;
+
   @CreateDateColumn({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   created_at: Date;
 

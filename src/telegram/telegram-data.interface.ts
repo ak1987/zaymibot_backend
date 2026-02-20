@@ -51,4 +51,10 @@ export interface TelegramBotData {
   textOneAll: string;
   textSecondAll: string;
   insuranceText: string;
+  scheduled: {
+    '5min': { text: string; link: string };
+    '15min': { text: string; link: string };
+    '24h': { text: string; link: string };
+    '30h': { text: string; link: string };
+  };
 }

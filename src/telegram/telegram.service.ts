@@ -913,4 +913,24 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       this.verboseLog(`User ${user} encountered error while requesting insurance PDF`);
     }
   }
+
+  /**
+   * Sends a plain text message to a user by chat ID (e.g. for scheduled messages without Context).
+   */
+  async sendTextToUser(chatId: number, text: string): Promise<void> {
+    await this.bot.telegram.sendMessage(chatId, text);
+  }
+
+  /**
+   * Gets user's first name via Telegram getChat. Returns 'друг' if unavailable.
+   */
+  async getFirstNameByUserId(userId: number): Promise<string> {
+    try {
+      const chat = await this.bot.telegram.getChat(userId);
+      const first = (chat as { first_name?: string })?.first_name;
+      return first?.trim() || 'друг';
+    } catch {
+      return 'друг';
+    }
+  }
 }

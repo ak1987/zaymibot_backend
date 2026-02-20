@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ScheduleModule } from '@nestjs/schedule';
 import { OrmConfig } from './ormconfig';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -12,6 +13,7 @@ import { TelegramUser } from './telegram/telegram-user.entity';
 @Module({
   imports: [
     TypeOrmModule.forRoot(OrmConfig),
+    ScheduleModule.forRoot(),
     UsersModule,
     VisitorsModule,
     TelegramModule,
