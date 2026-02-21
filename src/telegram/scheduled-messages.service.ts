@@ -11,6 +11,11 @@ const TWENTY_FOUR_H_MS = 24 * 60 * 60 * 1000;
 const THIRTY_H_MS = 30 * 60 * 60 * 1000;
 const RANDOM_DELAY_MAX_MS = 15000;
 
+function isPushEnabled(): boolean {
+  const v = process.env.PUSH_ENABLED;
+  return v === '1' || v?.toLowerCase() === 'true';
+}
+
 @Injectable()
 export class ScheduledMessagesService {
   private readonly logger = new Logger(ScheduledMessagesService.name);
@@ -22,6 +27,8 @@ export class ScheduledMessagesService {
 
   @Cron('* * * * *')
   async handleScheduledMessages(): Promise<void> {
+    if (!isPushEnabled()) return;
+
     const users = await this.telegramUsersService.getUsersWithPendingScheduledMessages();
     const now = Date.now();
 
